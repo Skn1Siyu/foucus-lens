@@ -19,6 +19,13 @@ function Registration {
 }
 try {
   $principal=[Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent()); Require (!$principal.IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)) 'Test must use a standard user'
+  # Secondary Logon can retain the parent process environment. Resolve known
+  # folders from the logged-on account's profile, including its own temp path.
+  $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+  $profile=(Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$sid").ProfileImagePath
+  Require ((Split-Path $profile -Leaf) -like 'FocusSmoke*') 'Unexpected test user profile'
+  $env:USERPROFILE=$profile; $env:APPDATA=Join-Path $profile 'AppData\Roaming'; $env:LOCALAPPDATA=Join-Path $profile 'AppData\Local'; $env:TEMP=Join-Path $env:LOCALAPPDATA 'Temp'; $env:TMP=$env:TEMP
+  $null=New-Item -Force -ItemType Directory $env:TEMP
   $target="$env:LOCALAPPDATA\复盘 测试\Deadlock Review"; $uninstall="$target\Uninstall Deadlock Review.exe"; $env:FOCUS_VERSION=$Version
   @'
 const p=require('node:path'), fs=require('node:fs');const dir=p.join(process.env.FOCUS_BIN,'resources','app.asar');

@@ -1,0 +1,67 @@
+name: Check Windows release binaries
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Numeric desktop version
+        required: true
+      installer_digest:
+        description: Expected installer SHA-256
+        required: true
+      portable_digest:
+        description: Expected portable SHA-256
+        required: true
+permissions:
+  contents: read
+jobs:
+  windows:
+    if: github.ref == 'refs/heads/main'
+    runs-on: windows-2022
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Fetch and authenticate the release binaries
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          SETUP_SHA: ${{ inputs.installer_digest }}
+          ZIP_SHA: ${{ inputs.portable_digest }}
+        run: |
+          $ErrorActionPreference='Stop'
+          if ($env:VERSION -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid version' }
+          $dir = New-Item -Type Directory "$env:PUBLIC\FocusLensCheck"
+          $release = gh api --paginate --slurp "repos/$env:GITHUB_REPOSITORY/releases?per_page=100" | ConvertFrom-Json
+          $match = @($release | ForEach-Object { $_ } | Where-Object { $_.tag_name -eq "desktop-v$env:VERSION" })
+          if ($match.Count -ne 1) { throw 'Expected a single release visible to the workflow' }
+          $base = "Deadlock-Review-$env:VERSION-windows-x64"
+          foreach ($asset in @(@("$base-setup.exe", $env:SETUP_SHA, 'setup.exe'), @("$base.zip", $env:ZIP_SHA, 'portable.zip'))) {
+            $item = @($match[0].assets | Where-Object name -eq $asset[0]); if ($item.Count -ne 1) { throw "Missing $($asset[0])" }
+            $out = Join-Path $dir $asset[2]
+            curl.exe --silent --show-error --fail --location --retry 2 -H "Authorization: Bearer $env:GH_TOKEN" -H 'Accept: application/octet-stream' $item[0].url -o $out
+            if ($LASTEXITCODE -or (Get-FileHash $out).Hash -ne $asset[1]) { throw "Digest mismatch: $($asset[0])" }
+          }
+      - name: Exercise installer and portable runtime as a standard user
+        shell: pwsh
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          $ErrorActionPreference='Stop'
+          $dir = "$env:PUBLIC\FocusLensCheck"; $account = 'FocusSmoke'; $pw = ([guid]::NewGuid().ToString() + 'aA!')
+          $null = New-LocalUser -Name $account -Password (ConvertTo-SecureString $pw -AsPlainText -Force)
+          Copy-Item .github/check-windows.ps1 $dir
+          $null = icacls $dir /grant "${account}:(OI)(CI)M"
+          $null = icacls $dir /grant "${account}:(OI)(CI)M" /T
+          $args = "-NoProfile -ExecutionPolicy Bypass -File `"$dir\check-windows.ps1`" -Version $env:VERSION"
+          $action = New-ScheduledTaskAction -Execute (Get-Command pwsh).Source -Argument $args -WorkingDirectory $dir
+          try {
+            $null = Register-ScheduledTask -TaskName FocusSmoke -Action $action -User "$env:COMPUTERNAME\$account" -Password $pw -RunLevel Limited -Force
+            Start-ScheduledTask FocusSmoke
+            $end = (Get-Date).AddMinutes(10)
+            while (!(Test-Path "$dir\result.txt") -and (Get-Date) -lt $end) { Start-Sleep -Seconds 3 }
+            if (Test-Path "$dir\checks.txt") { Get-Content "$dir\checks.txt" }
+            if (!(Test-Path "$dir\result.txt")) { Get-ScheduledTaskInfo FocusSmoke; throw 'Worker did not finish' }
+            if ((Get-Content "$dir\result.txt" -Raw).Trim() -ne 'PASS') { throw (Get-Content "$dir\result.txt" -Raw) }
+          } finally { Unregister-ScheduledTask FocusSmoke -Confirm:$false -ErrorAction SilentlyContinue; Remove-LocalUser $account }

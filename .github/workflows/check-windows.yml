@@ -56,13 +56,13 @@ jobs:
           $null = icacls $dir /grant "${account}:(OI)(CI)M"
           $null = icacls $dir /grant "${account}:(OI)(CI)M" /T
           $args = "-NoProfile -ExecutionPolicy Bypass -File `"$dir\check-windows.ps1`" -Version $env:VERSION"
-          $action = New-ScheduledTaskAction -Execute (Get-Command pwsh).Source -Argument $args -WorkingDirectory $dir
+          $cred = [pscredential]::new("$env:COMPUTERNAME\$account", (ConvertTo-SecureString $pw -AsPlainText -Force))
           try {
-            $null = Register-ScheduledTask -TaskName FocusSmoke -Action $action -User "$env:COMPUTERNAME\$account" -Password $pw -RunLevel Limited -Force
-            Start-ScheduledTask FocusSmoke
-            $end = (Get-Date).AddMinutes(10)
-            while (!(Test-Path "$dir\result.txt") -and (Get-Date) -lt $end) { Start-Sleep -Seconds 8; if (Test-Path "$dir\checks.txt") { Get-Content "$dir\checks.txt" -Tail 1 }; if ((Get-ScheduledTask FocusSmoke).State -eq 'Ready' -and !(Test-Path "$dir\result.txt")) { Get-ScheduledTaskInfo FocusSmoke; throw 'Worker failed to start or exited unexpectedly' } }
+            Start-Service seclogon
+            $proc=Start-Process -FilePath (Get-Command pwsh).Source -ArgumentList $args -WorkingDirectory $dir -Credential $cred -LoadUserProfile -PassThru
+            $end=(Get-Date).AddMinutes(10)
+            while (!$proc.WaitForExit(8000) -and (Get-Date) -lt $end) { if (Test-Path "$dir\checks.txt") { Get-Content "$dir\checks.txt" -Tail 1 } }
             if (Test-Path "$dir\checks.txt") { Get-Content "$dir\checks.txt" }
-            if (!(Test-Path "$dir\result.txt")) { Get-ScheduledTaskInfo FocusSmoke; throw 'Worker did not finish' }
+            if (!(Test-Path "$dir\result.txt")) { throw 'Worker did not finish' }
             if ((Get-Content "$dir\result.txt" -Raw).Trim() -ne 'PASS') { throw (Get-Content "$dir\result.txt" -Raw) }
-          } finally { Unregister-ScheduledTask FocusSmoke -Confirm:$false -ErrorAction SilentlyContinue; Remove-LocalUser $account }
+          } finally { Remove-LocalUser $account }

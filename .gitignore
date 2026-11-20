@@ -3,6 +3,7 @@ node_modules/
 dist/
 release/
 reports/
+/docs/
 **/bin/
 **/obj/
 .DS_Store

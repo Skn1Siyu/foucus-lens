@@ -4,6 +4,7 @@ $work=$PSScriptRoot
 function Log($text) { Add-Content "$work\checks.txt" $text }
 function Require($ok, $msg) { if (!$ok) { throw $msg } }
 function Invoke-Exe($file, $arguments) {
+  Log "Starting: $(Split-Path $file -Leaf)"
   $p=Start-Process -FilePath $file -ArgumentList $arguments -PassThru
   if (!$p.WaitForExit(120000)) { $p.Kill(); throw "Timed out: $(Split-Path $file -Leaf)" }
   Require ($p.ExitCode -eq 0) "Exit $($p.ExitCode): $(Split-Path $file -Leaf)"
@@ -35,5 +36,17 @@ if(require(p.join(dir,'package.json')).version!==process.env.FOCUS_VERSION)throw
   Require ((Get-FileHash $uninstall).Hash -ne $original) 'Failed to simulate damage'
   Install; Require ((Get-FileHash $uninstall).Hash -eq $original) 'Installer failed to restore verified uninstaller'; Uninstall
   Log 'Reinstall after a damaged uninstaller, restored digest, normal uninstall and saved data passed.'
+  if ($Version -eq '0.7.2') {
+    # Reproduce the 0.7.1 registered executable using only its public PE resource
+    # differences. Do not distribute the old app archive or any user data.
+    Install
+    $exe="$target\Deadlock Review.exe"; $pe=[IO.File]::ReadAllBytes($exe)
+    $legacyDigest=[Text.Encoding]::ASCII.GetBytes('b5e82b4859856055bb27a36d2b0f8b3b3ab307766bc79e3f32d1ac245e3b0233'); $legacyDigest.CopyTo($pe,209750751)
+    $pe[209808214]=1; $pe[209808222]=1; $pe[209808516]=49; $pe[209808864]=49; [IO.File]::WriteAllBytes($exe,$pe)
+    Require ((Get-FileHash $exe).Hash -eq 'ff5fb410266d7d90aed53c125be3381d96f80c31798c87b3f50fdf24496001d0') 'Legacy executable fingerprint mismatch'
+    Set-ItemProperty (Registration).PSPath DisplayVersion '0.7.1'; [IO.File]::WriteAllBytes($uninstall,[byte[]](1,2,3,4))
+    Install; Require ((Get-FileHash $uninstall).Hash -eq $original) 'Legacy repair digest mismatch'; Test-Runtime $target; Uninstall
+    Log 'Simulated 0.7.1 registration, exact legacy EXE and truncated uninstaller: upgrade, runtime and normal uninstall passed.'
+  }
   Set-Content "$work\result.txt" 'PASS'
 } catch { Set-Content "$work\result.txt" "$($_.Exception.Message) (line $($_.InvocationInfo.ScriptLineNumber))"; exit 1 }

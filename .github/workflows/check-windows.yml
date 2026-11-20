@@ -61,7 +61,7 @@ jobs:
             $null = Register-ScheduledTask -TaskName FocusSmoke -Action $action -User "$env:COMPUTERNAME\$account" -Password $pw -RunLevel Limited -Force
             Start-ScheduledTask FocusSmoke
             $end = (Get-Date).AddMinutes(10)
-            while (!(Test-Path "$dir\result.txt") -and (Get-Date) -lt $end) { Start-Sleep -Seconds 3 }
+            while (!(Test-Path "$dir\result.txt") -and (Get-Date) -lt $end) { Start-Sleep -Seconds 8; if (Test-Path "$dir\checks.txt") { Get-Content "$dir\checks.txt" -Tail 1 }; if ((Get-ScheduledTask FocusSmoke).State -eq 'Ready' -and !(Test-Path "$dir\result.txt")) { Get-ScheduledTaskInfo FocusSmoke; throw 'Worker failed to start or exited unexpectedly' } }
             if (Test-Path "$dir\checks.txt") { Get-Content "$dir\checks.txt" }
             if (!(Test-Path "$dir\result.txt")) { Get-ScheduledTaskInfo FocusSmoke; throw 'Worker did not finish' }
             if ((Get-Content "$dir\result.txt" -Raw).Trim() -ne 'PASS') { throw (Get-Content "$dir\result.txt" -Raw) }
